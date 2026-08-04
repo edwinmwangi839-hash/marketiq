@@ -1,8 +1,6 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useMemo, type CSSProperties } from 'react';
-import { Ban } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Footer } from '@/components/custom/footer';
 import { Header } from '@/components/custom/header';
@@ -11,31 +9,11 @@ import { ThemeToggle } from '@/components/custom/theme-toggle';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useIsMobile } from '@/hooks/use-is-mobile';
 import { useContractMarkers } from '@/hooks/use-contract-markers';
+import { useMemo, type CSSProperties } from 'react';
+import { Ban } from 'lucide-react';
 import { TradeControls } from './trade-controls';
-import { ConfigurableAccumulatorControls } from './configurable-accumulator-controls';
-import type { ChartBarrier } from '@/components/custom/smart-chart';
-import type {
-  AuthState,
-  DerivAccount,
-  ActiveSymbol,
-  BuyResult,
-} from '@deriv/core';
-import type { GrowthRate } from '../lib/types';
-import type { AccumulatorProposalInfo } from '../hooks/use-accumulator-proposal';
-import type { UseSmartChartsApiReturn } from '@/hooks/use-smartcharts-api';
-import type { SmartChartChartData } from '@/hooks/use-smartchart-chart-data';
-import type { OpenPosition } from '../lib/types';
-import type { AccumulatorsAppConfig } from '../lib/app-config';
-
-const AccumulatorChart = dynamic(
-  () => import('./accumulator-chart').then(module => module.AccumulatorChart),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="h-full w-full animate-pulse rounded-md border border-border/50 dark:border-white/[0.08] bg-muted/30" />
-    ),
-  }
-);
+import { ConfigurableTradeControls } from './configurable-trade-controls';
+import type { RiseFallAppConfig } from '../lib/app-config';
 
 /**
  * A zone overlaid on the chart region. Two modes:
@@ -77,8 +55,27 @@ function FixedZone({
     </div>
   );
 }
+import type {
+  AuthState,
+  DerivAccount,
+  ActiveSymbol,
+  ProposalInfo,
+  BuyResult,
+  DerivWS,
+} from '@deriv/core';
+import type { Direction, DurationSelectUnit, DurationOption } from '../lib/types';
+import type { UseSmartChartsApiReturn } from '@/hooks/use-smartcharts-api';
+import type { SmartChartChartData } from '@/hooks/use-smartchart-chart-data';
+import type { OpenPosition } from '../lib/types';
 
-export interface AccumulatorViewProps {
+const RiseFallChart = dynamic(() => import('./rise-fall-chart').then(module => module.RiseFallChart), {
+  ssr: false,
+  loading: () => (
+    <div className="h-full w-full animate-pulse rounded-md border border-border/50 dark:border-white/[0.08] bg-muted/30" />
+  ),
+});
+
+export interface RiseFallViewProps {
   // Auth
   authState: AuthState;
   accounts: DerivAccount[];
@@ -89,6 +86,7 @@ export interface AccumulatorViewProps {
   onSwitchAccount: (accountId: string) => Promise<void>;
 
   // Connection / loading
+  ws: DerivWS | null;
   isConnected: boolean;
   isLoading: boolean;
   error: string | null;
@@ -103,14 +101,22 @@ export interface AccumulatorViewProps {
   pipSize?: number;
 
   // Trade controls
-  growthRate: GrowthRate;
-  setGrowthRate: (rate: GrowthRate) => void;
-  growthRateOptions: { value: number; label: string }[];
+  direction: Direction;
+  setDirection: (direction: Direction) => void;
+  allowEquals: boolean;
+  setAllowEquals: (value: boolean) => void;
   stake: string;
   setStake: (value: string) => void;
-  takeProfit: string;
-  setTakeProfit: (value: string) => void;
-  proposal: AccumulatorProposalInfo | null;
+  duration: number;
+  setDuration: (value: number) => void;
+  durationOptions: DurationOption[];
+  durationUnit: DurationSelectUnit;
+  setDurationUnit: (unit: DurationSelectUnit) => void;
+  endDate: Date | undefined;
+  setEndDate: (date: Date | undefined) => void;
+  endTime: string;
+  setEndTime: (time: string) => void;
+  proposal: ProposalInfo | null;
   buyContract: () => Promise<void>;
   isBuying: boolean;
   buyResult: BuyResult | null;
@@ -122,14 +128,17 @@ export interface AccumulatorViewProps {
   sellContract: (contractId: number, bidPrice: string) => Promise<void>;
   sellingId: number | null;
 
-  // Chart data
+  // Chart data (elevated to page so preview can inject frozen mocks)
   chartData: SmartChartChartData | undefined;
   getQuotes: UseSmartChartsApiReturn['getQuotes'];
   subscribeQuotes: UseSmartChartsApiReturn['subscribeQuotes'];
   unsubscribeQuotes: UseSmartChartsApiReturn['unsubscribeQuotes'];
   /** Passed to SmartChart. Set to false for a frozen preview. Defaults to true. */
   isLive?: boolean;
-  /** Unix epoch (seconds) to freeze the chart at. */
+  /**
+   * Unix epoch (seconds) to freeze the chart at. When set, SmartCharts renders
+   * a static historical snapshot and never sets up a live subscription.
+   */
   endEpoch?: number;
 
   // Branding (used by preview route; no-op in the real app)
@@ -138,10 +147,10 @@ export interface AccumulatorViewProps {
 
   /**
    * No-code config. When provided, the trade controls render in configurable
-   * styles/order (ConfigurableAccumulatorControls). When omitted, the standard
+   * styles/order (ConfigurableTradeControls). When omitted, the standard
    * TradeControls render unchanged.
    */
-  appConfig?: AccumulatorsAppConfig;
+  appConfig?: RiseFallAppConfig;
   /** Edit mode — components become selectable (click opens their accordion). */
   editMode?: boolean;
   /** Called when an editable component is clicked (e.g. "chart", "stake"). */
@@ -151,10 +160,10 @@ export interface AccumulatorViewProps {
   /** Rearrange mode — drag blocks in the phone to reorder the layout. */
   rearrangeMode?: boolean;
   /** Called with the new block order after a drag-drop reorder. */
-  onReorder?: (order: AccumulatorsAppConfig['order']) => void;
+  onReorder?: (order: RiseFallAppConfig['order']) => void;
 }
 
-export function AccumulatorView({
+export function RiseFallView({
   authState,
   accounts,
   activeAccount,
@@ -162,6 +171,7 @@ export function AccumulatorView({
   onSignUp,
   onLogout,
   onSwitchAccount,
+  ws,
   isConnected,
   isLoading,
   error,
@@ -170,13 +180,21 @@ export function AccumulatorView({
   selectSymbol,
   prices,
   pipSize,
-  growthRate,
-  setGrowthRate,
-  growthRateOptions,
+  direction,
+  setDirection,
+  allowEquals,
+  setAllowEquals,
   stake,
   setStake,
-  takeProfit,
-  setTakeProfit,
+  duration,
+  setDuration,
+  durationOptions,
+  durationUnit,
+  setDurationUnit,
+  endDate,
+  setEndDate,
+  endTime,
+  setEndTime,
   proposal,
   buyContract,
   isBuying,
@@ -184,8 +202,6 @@ export function AccumulatorView({
   buyError,
   clearBuyResult,
   openPositions,
-  sellContract,
-  sellingId,
   chartData,
   getQuotes,
   subscribeQuotes,
@@ -200,40 +216,10 @@ export function AccumulatorView({
   selectedKey,
   rearrangeMode,
   onReorder,
-}: AccumulatorViewProps) {
+}: RiseFallViewProps) {
   const isMobile = useIsMobile();
   const chartHidden = appConfig?.chart?.hidden ?? false;
   const contractMarkers = useContractMarkers(openPositions, activeSymbol?.underlying_symbol, isMobile);
-
-  // Accumulators only allow 1 trade at a time — find the active ACCU position for the current symbol
-  const activeAccuPosition = openPositions.find(
-    (proposal) => proposal.contract_type === 'ACCU' && proposal.underlying_symbol === activeSymbol?.underlying_symbol
-  ) ?? null;
-
-  // Barrier color: green (#008832) when tick is inside, red (#cc2e3d) when crossed.
-  const barrierColor = proposal?.hasCrossedBarrier ? '#cc2e3d' : '#008832';
-
-  const chartBarriers = useMemo<ChartBarrier[]>(
-    () =>
-      proposal?.highBarrier && proposal?.lowBarrier
-        ? [
-            {
-              shade: 'BETWEEN',
-              high: proposal.highBarrier,
-              low: proposal.lowBarrier,
-              relative: false,
-              draggable: false,
-              hideBarrierLine: false,
-              hideOffscreenBarrier: true,
-              hideOffscreenLine: true,
-              hidePriceLabel: false,
-              color: barrierColor,
-              shadeColor: barrierColor,
-            },
-          ]
-        : [],
-    [proposal, barrierColor]
-  );
 
   // In edit mode, login/sign-up/account actions are inert (no OAuth navigation
   // out of the editor) — only the theme toggle stays interactive.
@@ -274,7 +260,7 @@ export function AccumulatorView({
   const chartBlock = useMemo(
     () =>
       chartHidden ? (
-        <div className="acc-chart-hidden relative">
+        <div className="rf-chart-hidden relative">
           <div className={editMode ? 'pointer-events-none select-none' : ''}>
             <SymbolSelector
               symbols={symbols}
@@ -289,11 +275,11 @@ export function AccumulatorView({
           )}
         </div>
       ) : (
-        <div className="relative max-lg:h-[50dvh] lg:h-[min(33.6rem,66vh)] lg:min-h-[384px]">
+        <div className="relative max-lg:h-[45dvh] lg:h-[min(33.6rem,66vh)] lg:min-h-[384px]">
           <div className={`h-full ${editMode ? 'pointer-events-none select-none' : ''}`}>
             {chartData ? (
-              <AccumulatorChart
-                symbolKey="accumulator-chart"
+              <RiseFallChart
+                symbolKey="rise-fall-chart"
                 symbol={activeSymbol?.underlying_symbol}
                 isConnectionOpened={isConnected}
                 isMobile={isMobile}
@@ -304,7 +290,6 @@ export function AccumulatorView({
                 onSymbolChange={selectSymbol}
                 isLive={isLive}
                 endEpoch={endEpoch}
-                barriers={chartBarriers}
                 contractsArray={contractMarkers}
               />
             ) : (
@@ -336,7 +321,6 @@ export function AccumulatorView({
       selectSymbol,
       isLive,
       endEpoch,
-      chartBarriers,
       contractMarkers,
       rearrangeMode,
     ]
@@ -358,29 +342,37 @@ export function AccumulatorView({
   }
 
   // The configurable controls. `withChart` includes the chart as a reorderable
-  // block in the single column (mobile); on desktop the chart is its own column.
+  // block in the single column (mobile); on desktop the chart is its own column,
+  // so it's omitted here.
   const renderConfigurable = (withChart: boolean) =>
     appConfig ? (
-      <ConfigurableAccumulatorControls
+      <ConfigurableTradeControls
         config={appConfig}
         chartSlot={withChart ? chartBlock : undefined}
-        growthRate={growthRate}
-        onGrowthRateChange={setGrowthRate}
-        growthRateOptions={growthRateOptions}
+        direction={direction}
+        onDirectionChange={setDirection}
+        allowEquals={allowEquals}
+        onAllowEqualsChange={setAllowEquals}
         isConnected={isConnected}
         stake={stake}
         onStakeChange={setStake}
-        takeProfit={takeProfit}
-        onTakeProfitChange={setTakeProfit}
+        duration={duration}
+        onDurationChange={setDuration}
+        durationOptions={durationOptions}
+        durationUnit={durationUnit}
+        onDurationUnitChange={setDurationUnit}
+        endDate={endDate}
+        onEndDateChange={setEndDate}
+        endTime={endTime}
+        onEndTimeChange={setEndTime}
+        ws={ws}
+        activeSymbol={activeSymbol}
         proposal={proposal}
         onBuy={buyContract}
         isBuying={isBuying}
         buyResult={buyResult}
         buyError={buyError}
         onClearBuyResult={clearBuyResult}
-        activePosition={activeAccuPosition}
-        onClose={sellContract}
-        isClosing={sellingId === activeAccuPosition?.contract_id}
         isAuthenticated={authState === 'authenticated'}
         editMode={editMode}
         onSelect={onSelect}
@@ -402,6 +394,9 @@ export function AccumulatorView({
         // (incl. the dark/light theme toggle) stays clickable.
         <div className="group/hdr fixed left-0 right-0 top-0 z-50" style={{ height: 66 }}>
           {headerEl}
+          {/* Hover hint: a ring + a LEFT-aligned chip so it never covers the
+              right-side theme toggle (which stays usable). pointer-events-none
+              so nothing here blocks clicks. */}
           <div className="pointer-events-none absolute inset-0 z-[60] opacity-0 ring-2 ring-inset ring-muted-foreground/25 transition-opacity group-hover/hdr:opacity-100">
             <span className="absolute left-3 top-1/2 flex -translate-y-1/2 items-center gap-1.5 rounded-md bg-background/90 px-2 py-1 text-[11px] font-medium text-muted-foreground shadow-sm ring-1 ring-border">
               <Ban className="h-3.5 w-3.5" />
@@ -455,38 +450,42 @@ export function AccumulatorView({
         )
       ) : (
         /* Standard layout (unchanged): 2-column chart + controls card. */
-        <div className="flex w-full max-w-7xl mx-auto flex-col px-3 py-2 sm:px-4 sm:py-4 gap-2 sm:gap-3 max-lg:flex-1 max-lg:min-h-0 max-lg:overflow-hidden lg:flex-none lg:overflow-visible">
+        <div className="flex w-full max-w-7xl mx-auto flex-col max-lg:px-0 max-lg:py-0 px-3 py-2 sm:px-4 sm:py-4 gap-2 sm:gap-3 max-lg:flex-1 max-lg:min-h-0 max-lg:overflow-hidden lg:flex-none lg:overflow-visible">
           <div className="max-lg:flex max-lg:flex-col max-lg:flex-1 max-lg:min-h-0 lg:grid lg:grid-cols-[1fr_400px] lg:gap-4">
-            {/* Column 1: Chart */}
-            <div className="max-lg:shrink-0 flex flex-col gap-2 max-lg:pb-2 pt-2 lg:py-0">
+            <div className="max-lg:shrink-0 flex flex-col gap-2 max-lg:px-3 max-lg:pb-2 pt-2 lg:py-0">
               {chartBlock}
             </div>
-
-            {/* Column 2: Trade controls in a Card */}
-            <div className="max-lg:flex-1 max-lg:min-h-0 max-lg:overflow-y-auto max-lg:overscroll-contain max-lg:border-t max-lg:border-border max-lg:pt-3 max-lg:pb-24 lg:pt-0 flex flex-col gap-3">
+            <div className="max-lg:flex-1 max-lg:min-h-0 max-lg:overflow-y-auto max-lg:overscroll-contain max-lg:px-3 max-lg:border-t max-lg:border-border max-lg:pt-3 max-lg:pb-28 lg:pt-0 flex flex-col gap-3">
               {isLoading ? (
                 <Skeleton className="lg:h-[min(33.6rem,66vh)] lg:min-h-[384px] max-lg:h-48 w-full rounded-xl" />
               ) : (
                 <Card className="lg:h-[min(33.6rem,66vh)] lg:min-h-[384px] lg:overflow-y-auto">
                   <CardContent className="pt-4">
                     <TradeControls
-                      growthRate={growthRate}
-                      onGrowthRateChange={setGrowthRate}
-                      growthRateOptions={growthRateOptions}
+                      direction={direction}
+                      onDirectionChange={setDirection}
+                      allowEquals={allowEquals}
+                      onAllowEqualsChange={setAllowEquals}
                       isConnected={isConnected}
                       stake={stake}
                       onStakeChange={setStake}
-                      takeProfit={takeProfit}
-                      onTakeProfitChange={setTakeProfit}
+                      duration={duration}
+                      onDurationChange={setDuration}
+                      durationOptions={durationOptions}
+                      durationUnit={durationUnit}
+                      onDurationUnitChange={setDurationUnit}
+                      endDate={endDate}
+                      onEndDateChange={setEndDate}
+                      endTime={endTime}
+                      onEndTimeChange={setEndTime}
+                      ws={ws}
+                      activeSymbol={activeSymbol}
                       proposal={proposal}
                       onBuy={buyContract}
                       isBuying={isBuying}
                       buyResult={buyResult}
                       buyError={buyError}
                       onClearBuyResult={clearBuyResult}
-                      activePosition={activeAccuPosition}
-                      onClose={sellContract}
-                      isClosing={sellingId === activeAccuPosition?.contract_id}
                       isAuthenticated={authState === 'authenticated'}
                     />
                   </CardContent>
